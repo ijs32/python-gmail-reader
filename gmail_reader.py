@@ -1,6 +1,7 @@
 from __future__ import print_function
 
 import os.path
+from re import search
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -9,7 +10,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 # If modifying these scopes, delete the file token.json.
-SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
 
 
 def main():
@@ -33,23 +34,29 @@ def main():
         # Save the credentials for the next run
         with open('token.json', 'w') as token:
             token.write(creds.to_json())
+    service = build('gmail', 'v1', credentials=creds)
+    mark_as_read(service, "is:unread")
 
-    try:
-        # Call the Gmail API
-        service = build('gmail', 'v1', credentials=creds)
-        results = service.users().labels().list(userId='me').execute()
-        labels = results.get('labels', [])
 
-        if not labels:
-            print('No labels found.')
-            return
-        print('Labels:')
-        for label in labels:
-            print(label['name'])
-
-    except HttpError as error:
-        # TODO(developer) - Handle errors from gmail API.
-        print(f'An error occurred: {error}')
+def mark_as_read(service, query):
+    def search_messages(service, query):
+        result = service.users().messages().list(userId='me', q=query).execute()
+        messages = []
+        if 'messages' in result:
+            messages.extend(result['messages'])
+        while 'nextPageToken' in result and (len(messages) < 1000):
+            page_token = result['nextPageToken']
+            result = service.users().messages().list(
+                userId='me', q=query, pageToken=page_token).execute()
+            if 'messages' in result:
+                messages.extend(result['messages'])
+        return messages
+    messages_to_mark = search_messages(service, query)
+    return service.users().messages().batchModify(
+        userId='me', body={
+            "ids": [msg['id'] for msg in messages_to_mark],
+            "removeLabelIds": ['UNREAD']
+        }).execute()
 
 
 if __name__ == '__main__':
